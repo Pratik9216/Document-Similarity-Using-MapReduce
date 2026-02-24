@@ -7,13 +7,24 @@
 ## Approach and Implementation
 
 ### Mapper Design
-[Explain the logic of your Mapper class. What is its input key-value pair? What does it emit as its output key-value pair? How does it help in solving the overall problem?]
+The `DocumentSimilarityMapper` extends `Mapper<LongWritable, Text, Text, Text>`. Its input key-value pair is `(byte offset, line of text)` from the input file. Each line is parsed as `DocID word1 word2 ...` — the first token becomes the document identifier and the remaining tokens form the document's word set (lowercased and deduplicated using a `HashSet`).
+
+All documents are stored in an in-memory `LinkedHashMap<String, Set<String>>` during the `map()` phase. In the `cleanup()` method, the mapper generates all unique document pairs and computes the **Jaccard Similarity** for each pair:
+
+**Jaccard Similarity = |A ∩ B| / |A ∪ B|**
+
+The mapper emits `(Text key, Text value)` pairs where the key is `"DocA, DocB"` and the value is `"Similarity: X.XX"`.
 
 ### Reducer Design
-[Explain the logic of your Reducer class. What is its input key-value pair? How does it process the values for a given key? What does it emit as the final output? How do you calculate the Jaccard Similarity here?]
+The `DocumentSimilarityReducer` extends `Reducer<Text, Text, Text, Text>`. It acts as a pass-through reducer — its input key-value pair is `(document pair, similarity score)` from the mapper, and it simply writes each pair to the output. Since the mapper computes the final similarity, no aggregation is needed in the reducer.
 
 ### Overall Data Flow
-[Describe how data flows from the initial input files, through the Mapper, shuffle/sort phase, and the Reducer to produce the final output.]
+1. **Input**: Each line of the input file represents one document: `DocID word1 word2 ...`
+2. **Mapper (map phase)**: Parses each line and stores `docID → word set` in memory
+3. **Mapper (cleanup phase)**: Generates all document pairs, computes Jaccard similarity using set intersection and union, emits results
+4. **Shuffle/Sort**: Hadoop sorts the key-value pairs by the document pair key
+5. **Reducer**: Passes through the similarity scores to the output
+6. **Output**: Tab-separated `DocA, DocB\tSimilarity: X.XX` for each pair
 
 ---
 
@@ -42,7 +53,7 @@ mvn clean package
 Copy the JAR file to the Hadoop ResourceManager container:
 
 ```bash
-docker cp target/WordCountUsingHadoop-0.0.1-SNAPSHOT.jar resourcemanager:/opt/hadoop-3.2.1/share/hadoop/mapreduce/
+docker cp target/DocumentSimilarity-0.0.1-SNAPSHOT.jar resourcemanager:/opt/hadoop-3.2.1/share/hadoop/mapreduce/
 ```
 
 ### 5. **Move Dataset to Docker Container**
@@ -83,10 +94,10 @@ hadoop fs -put ./input.txt /input/data
 
 ### 8. **Execute the MapReduce Job**
 
-Run your MapReduce job using the following command: Here I got an error saying output already exists so I changed it to output1 instead as destination folder
+Run your MapReduce job using the following command:
 
 ```bash
-hadoop jar /opt/hadoop-3.2.1/share/hadoop/mapreduce/WordCountUsingHadoop-0.0.1-SNAPSHOT.jar com.example.controller.Controller /input/data/input.txt /output1
+hadoop jar /opt/hadoop-3.2.1/share/hadoop/mapreduce/DocumentSimilarity-0.0.1-SNAPSHOT.jar com.example.controller.DocumentSimilarityDriver /input/data/input.txt /output1
 ```
 
 ### 9. **View the Output**
@@ -120,7 +131,11 @@ To copy the output from HDFS to your local machine:
 
 ## Challenges and Solutions
 
-[Describe any challenges you faced during this assignment. This could be related to the algorithm design (e.g., how to generate pairs), implementation details (e.g., data structures, debugging in Hadoop), or environmental issues. Explain how you overcame these challenges.]
+1. **Algorithm Design — Pairwise Comparison**: Computing similarity between all document pairs in a distributed MapReduce framework was the primary challenge. Since MapReduce processes records independently, comparing all pairs required a different strategy. I solved this by using Hadoop's `cleanup()` method in the Mapper to store all documents in memory during the `map()` phase and then generating all pairs and computing Jaccard similarity after all records are processed.
+
+2. **Data Structure Choice**: Using `HashSet<String>` for word storage ensured automatic deduplication and efficient set operations (intersection and union) needed for Jaccard similarity computation. Using `LinkedHashMap` for document storage preserved insertion order, ensuring consistent pair ordering in the output.
+
+3. **Output Format**: Formatting the Jaccard similarity score to exactly 2 decimal places using `String.format("%.2f", similarity)` to match the expected output format.
 
 ---
 ## Sample Input
@@ -135,8 +150,13 @@ Document3 Sample text with different words
 
 **Output from `small_dataset.txt`**
 ```
-"Document1, Document2 Similarity: 0.56"
-"Document1, Document3 Similarity: 0.42"
-"Document2, Document3 Similarity: 0.50"
+Document1, Document2	Similarity: 0.18
+Document1, Document3	Similarity: 0.20
+Document2, Document3	Similarity: 0.10
 ```
-## Obtained Output: (Place your obtained output here.)
+## Obtained Output:
+```
+Document1, Document2	Similarity: 0.18
+Document1, Document3	Similarity: 0.20
+Document2, Document3	Similarity: 0.10
+```
